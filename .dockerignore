@@ -1,0 +1,41 @@
+# Version control and editors
+.git
+.gitignore
+.github
+.opencode
+.fleet
+.idea
+.nova
+.vscode
+.zed
+.editorconfig
+.phpactor.json
+
+# Dependencies: vendor/ is built inside the image, node_modules is unused
+node_modules
+vendor
+
+# Secrets: .env is provided at runtime (bind mount or compose environment)
+.env
+.env.*
+!.env.example
+auth.json
+
+# Runtime artefacts that belong to the host, not the image
+*.log
+.DS_Store
+.phpunit.result.cache
+.phpunit.cache
+storage/logs/*
+storage/framework/cache/data/*
+storage/framework/sessions/*
+storage/framework/views/*
+storage/pail
+bootstrap/cache/*.php
+public/storage
+
+# Container plumbing itself
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.*.yml

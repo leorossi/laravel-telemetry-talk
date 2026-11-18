@@ -1,0 +1,43 @@
+# Self-contained Slidev dev server for the talk deck.
+#
+#   docker compose -f docker-compose.slides.yml up
+#
+# Then open http://localhost:3030. Edit anything under slides/ and the browser
+# updates in place - that is the hot module reload.
+#
+# This file is deliberately separate from docker-compose.yml so the Laravel demo
+# stack and the deck can be started, stopped and rebuilt independently. The
+# explicit project name is what keeps the two stacks from seeing each other as
+# orphan containers.
+name: telemetry-talk-slides
+
+services:
+  slides:
+    build:
+      context: ./slides
+    image: laravel-telemetry-talk-slides
+    container_name: telemetry-talk-slides
+    working_dir: /slidev
+    # Set SLIDES_ENTRY=slides-light.md to serve the white-background variant.
+    command: npx slidev ${SLIDES_ENTRY:-slides.md} --remote
+    ports:
+      - "3030:3030"
+    volumes:
+      # The deck lives on the host so edits are live.
+      - ./slides:/slidev
+      # node_modules comes from the image, never from the host. Docker only
+      # fills a named volume when it is empty, so after changing package.json
+      # rebuild and recreate it:
+      #   docker compose -f docker-compose.slides.yml build
+      #   docker volume rm telemetry-talk-slides-node-modules
+      #   docker compose -f docker-compose.slides.yml up
+      - slides-node-modules:/slidev/node_modules
+    environment:
+      # Docker Desktop bind mounts do not reliably deliver inotify events into
+      # the container, so the dev server polls for changes. Set this to "false"
+      # on Linux, where the native watcher works.
+      CHOKIDAR_USEPOLLING: "true"
+
+volumes:
+  slides-node-modules:
+    name: telemetry-talk-slides-node-modules

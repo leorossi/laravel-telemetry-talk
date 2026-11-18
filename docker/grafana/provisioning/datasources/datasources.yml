@@ -1,0 +1,30 @@
+# Grafana is a view over the telemetry this stack already keeps.
+#
+# It does not receive OTLP and it does not store metrics or traces: every panel
+# and every Explore query is answered by one of these two datasources. That is
+# the whole point of the Grafana lens - the same data, one pane, no new backend.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # Prometheus scrapes the app every 5 s, so let Grafana align its steps.
+      timeInterval: 5s
+      httpMethod: POST
+
+  - name: Jaeger
+    uid: jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    editable: false
+    jsonData:
+      nodeGraph:
+        enabled: true

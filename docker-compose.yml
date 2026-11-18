@@ -1,0 +1,169 @@
+x-app-base: &app-base
+  build:
+    context: .
+  image: telemetry-demo-app
+  working_dir: /var/www/html
+  volumes:
+    - .:/var/www/html
+    - vendor:/var/www/html/vendor
+  environment:
+    DB_HOST: postgres
+    DB_PORT: "5432"
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    NIGHTWATCH_INGEST_URI: nightwatch:2407
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: telemetry-demo-postgres
+    environment:
+      POSTGRES_DB: telemetry_demo
+      POSTGRES_USER: telemetry
+      POSTGRES_PASSWORD: secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telemetry -d telemetry_demo"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.76.0
+    container_name: telemetry-demo-jaeger
+    # Enables the Light/Dark toggle. Without it the UI follows the OS colour
+    # scheme (dark on a dark-mode machine) and its dark theme has known
+    # contrast bugs, with no way to switch away.
+    command:
+      - --query.ui-config=/etc/jaeger/ui-config.json
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+      SPAN_STORAGE_TYPE: memory
+    volumes:
+      - ./docker/jaeger/ui-config.json:/etc/jaeger/ui-config.json:ro
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    container_name: telemetry-demo-prometheus
+    # Pull-based: Prometheus scrapes the app's /metrics every 5s. Nothing is
+    # pushed. The short scrape interval is deliberate - it makes a stage demo
+    # show the new numbers within a few seconds.
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=2h
+      # The /orders reset button deletes the demo series through the admin API.
+      - --web.enable-admin-api
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+
+  grafana:
+    # 12.2, not 12.3+: from 12.3 the Jaeger datasource is a standalone plugin
+    # that updates from Grafana's plugin catalog on startup, which needs the
+    # internet. 12.2 ships it inside the image, so the demo stays offline.
+    image: grafana/grafana:12.2.5
+    container_name: telemetry-demo-grafana
+    environment:
+      # The demo has no login prompt on stage: everyone is an anonymous viewer.
+      # The admin account still exists for provisioning or poking around.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_ANONYMOUS_ORG_NAME: Main Org.
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Grafana is a view over Prometheus and Jaeger; it stores nothing itself.
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/telemetry-demo-orders.json
+      # No outbound calls from a demo that is supposed to work offline.
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      # Grafana 12 otherwise downloads its "explore traces" and drilldown apps
+      # from grafana.com on first boot. Everything this demo needs is already
+      # in the image (the Jaeger datasource is bundled in 12.2), so switch the
+      # installer and the plugin catalog off.
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_PLUGINS_PLUGIN_ADMIN_ENABLED: "false"
+      GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED: "true"
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - jaeger
+
+  app:
+    <<: *app-base
+    container_name: telemetry-demo-app
+    command: php artisan serve --host=0.0.0.0 --port=8000 --no-reload
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8000/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  queue:
+    <<: *app-base
+    container_name: telemetry-demo-queue
+    command: php artisan queue:work
+
+  scheduler:
+    <<: *app-base
+    container_name: telemetry-demo-scheduler
+    command: php artisan schedule:work
+
+  # Pulse's heartbeat. This is the "timer" under the dashboard: a long-running
+  # process, not a cron job. Once a second it dispatches a beat that the
+  # recorders listen to, flushes the in-memory buffer to the database, and lets
+  # the Servers recorder sample CPU and memory every 15 seconds.
+  #
+  # Without this container Pulse still records requests and jobs, but the
+  # Servers card stays empty and pulse_values has no rows.
+  pulse:
+    <<: *app-base
+    container_name: telemetry-demo-pulse
+    command: php artisan pulse:check
+
+  # The Nightwatch agent, as a container instead of a process on your laptop.
+  #
+  # The app sends to it over the compose network; the agent holds the
+  # connection to Laravel's ingest. Same shape as the OTel collector: a local
+  # hop that absorbs the network, with a 0.5 s timeout on the app side.
+  nightwatch:
+    <<: *app-base
+    container_name: telemetry-demo-nightwatch
+    command: php artisan nightwatch:agent --listen-on=0.0.0.0:2407
+
+volumes:
+  postgres-data:
+  prometheus-data:
+    name: telemetry-demo-prometheus-data
+  grafana-data:
+    name: telemetry-demo-grafana-data
+  vendor:
+    name: telemetry-demo-vendor

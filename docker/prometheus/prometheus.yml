@@ -1,0 +1,15 @@
+# Prometheus scrapes the app; the app does not push to Prometheus.
+#
+# That is the part worth noticing in PHP. There is no long-lived process to
+# accumulate metrics in, so the *client* keeps the counters in shared storage
+# (here: the same Postgres the app already uses, see App\Support\OrderMetrics)
+# and Prometheus pulls the current values on its own schedule.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: telemetry-demo
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['app:8000']

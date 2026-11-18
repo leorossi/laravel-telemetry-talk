@@ -1,0 +1,17 @@
+# Point the app's OTLP exporter at the capture sink instead of Jaeger.
+#
+#   python3 docs/otlp-sample/capture.py /tmp/otlp.bin
+#   docker compose -f docker-compose.yml -f docs/otlp-sample/docker-compose.otlp-dump.yml up -d app
+#   curl -s -o /dev/null http://localhost:8000/fast
+#   docker compose up -d app          # put it back
+#
+# It has to be overridden here and not in .env: docker-compose.yml sets
+# OTEL_EXPORTER_OTLP_ENDPOINT as a real environment variable, and a real
+# environment variable beats .env.
+#
+# host.docker.internal points at the machine running Docker, which is where the
+# sink listens.
+services:
+  app:
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://host.docker.internal:9999
